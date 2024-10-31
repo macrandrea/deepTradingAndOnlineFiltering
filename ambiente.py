@@ -37,7 +37,7 @@ class Price():
 
         return self.imp
 
-    def set_price_ret(self, imp_t, C_t, D_t, u_t, N_assets, noise = True):
+    def set_price_ret(self, imp_t, C_t, D_t, u_t, N_assets, noise = False):
         '''
         returns: price_ret at time t+1
         pmt:
