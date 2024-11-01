@@ -65,7 +65,8 @@ class Agente():
         self.K = K
 
 
-    def get_control(self):
+    def get_control(self, residuals_fundamental_price, 
+                    residuals_efficient_price):
         return self.nn(torch.tensor(self.kf.get_state()).float())
     
     def train(self):
