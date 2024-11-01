@@ -9,18 +9,15 @@ import numpy as np
 
 class Price():
 
-    def __init__(self, price_0, imp_0, A_0, B_0, C_0, D_0, y_0, u_t, N_assets):
-        self.price = price_0
-        self.imp = imp_0
+    def __init__(self, A_0, B_0, sigma_noise_impact, 
+                 sigma_noise_price, N_assets):
         self.A = A_0
         self.B = B_0
-        self.C = C_0
-        self.D = D_0    
-        self.y = y_0
-        self.u_t = u_t
         self.N_assets = N_assets
+        self.sigma_noise_impact = sigma_noise_impact
+        self.sigma_noise_price = sigma_noise_price
 
-    def evolve_hidden(self, imp_t, A_t, B_t, u_t, N_assets):
+    def evolve_hidden(self, imp_tm1, u_tm1, N_assets):
         '''
         returns: hidden state at time t+1
         pmt
@@ -31,13 +28,13 @@ class Price():
         N_assets: number of assets
         ''' 
 
-        w_t = np.random.normal(0, 0.1, size=N_assets)
+        w_t = np.random.normal(0, self.sigma_noise_impact, size=N_assets)
 
-        self.imp = A_t @ imp_t + B_t @ u_t + w_t
+        imp_t = self.A @ imp_tm1 + self.B @ u_tm1 + w_t
 
-        return self.imp
-
-    def set_price_ret(self, imp_t, C_t, D_t, u_t, N_assets, noise = False):
+        return imp_t
+    
+    def fundamental_price(self, S_tm1, theta_t, u_tm1, N_assets, noise = False):
         '''
         returns: price_ret at time t+1
         pmt:
@@ -48,23 +45,31 @@ class Price():
         u_t: control at time t
         '''
         if noise:
-            v_t = np.random.normal(0, 0.1, size=N_assets)
+            v_t = np.random.normal(0, self.sigma_noise_price, size=N_assets)
         else:
             v_t = np.zeros(N_assets)
 
-        price_ret_t = C_t @ imp_t + D_t @ u_t + v_t
-
-        return price_ret_t
-
-    def get_price_ret(self, u_t):
+        S_t = S_tm1 + theta_t.reshape(self.N_assets,-1) @ u_tm1 + v_t
+        
+        return S_t
+    
+    def efficient_price(self, S_tm1, eta_t, u_t, noise = False):
         '''
         returns: price_ret at time t+1
         pmt:
+        price_t: price_ret at time t
+        imp_t: hidden state at time t
+        C_t: matrix C at time t
+        D_t: matrix D at time t
         u_t: control at time t
         '''
+        if noise:
+            v_t = np.random.normal(0, 0.1, size=self.N_assets)
+        else:
+            v_t = np.zeros(self.N_assets)
 
-        impact = self.evolve_hidden(self.imp, self.A, self.B, u_t, self.N_assets)
+        S_tilde_t = S_tm1 + eta_t.reshape(self.N_assets,-1) @ u_t + v_t
 
-        price = self.set_price_ret(impact, self.C, self.D, u_t, self.N_assets)
-
-        return price , impact     
+        return S_tilde_t
+        
+    
