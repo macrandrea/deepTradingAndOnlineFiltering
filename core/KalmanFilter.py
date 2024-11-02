@@ -2,7 +2,7 @@ import numpy as np
 from scipy.optimize import minimize
 
 class KalmanFilterWithMLE:
-    def __init__(self, M, Q, R):
+    def __init__(self, M, A_init=None, B_init=None, Q=None, R=None):
         """
         Initializes the Kalman Filter with dimensions and noise covariances.
 
@@ -13,7 +13,7 @@ class KalmanFilterWithMLE:
         """
         # Model dimensions
         self.M = M
-        self.state_dim = 2 * M**2  # Dimension of the state vector x
+        self.state_dim = M**2  # Dimension of the state vector x
         self.control_dim = M       # Dimension of the control vector u
         self.obs_dim = M           # Dimension of the observation vector y
 
@@ -23,9 +23,15 @@ class KalmanFilterWithMLE:
         self.Q = Q                 # Process noise covariance
         self.R = R                 # Measurement noise covariance
 
-        # Initialize matrices A, B, C with random values for MLE estimation
-        self.A = np.random.randn(self.state_dim, self.state_dim)
-        self.B = np.random.randn(self.state_dim, self.control_dim)
+        # Initialize matrices A and B for MLE estimation
+        if self.A is None:
+            self.A = np.random.randn(self.state_dim, self.state_dim)
+        else: 
+            self.A = A_init
+        if self.B is None:
+            self.B = np.random.randn(self.state_dim, self.control_dim)
+        else:
+            self.B = B_init
 
     def reset(self, initial_state=None, initial_covariance=None):
         """
@@ -38,34 +44,16 @@ class KalmanFilterWithMLE:
         self.x = initial_state if initial_state is not None else np.zeros(self.state_dim)
         self.P = initial_covariance if initial_covariance is not None else np.eye(self.state_dim)
 
-    def predict_S_tilde(self, u_k):
+    def compute_C(self):
         """
-        Predicts the next state and covariance based on the current state and control input.
-
-        Parameters:
-        - u_k: Current control input (shape: (control_dim,))
+        Computes the observation matrix C from the current state vector x.
+        Reshapes the last M^2 elements of the state vector x into a (M, M) matrix.
 
         Returns:
-        - x_pred: Predicted state (shape: (state_dim,))
-        - P_pred: Predicted covariance (shape: (state_dim, state_dim))
+        - C: Observation matrix derived from the state vector (shape: (M, M))
         """
-        x_eta_t_tm1 = self.A[1] @ self.x[2*self.M**2:] + self.B[1] @ u_k
-        return x_eta_t_tm1
-    
-    def predict_S(self, u_k):
-        """
-        Predicts the next state and covariance based on the current state and control input.
+        return self.x.reshape(self.M, self.M)
 
-        Parameters:
-        - u_k: Current control input (shape: (control_dim,))
-
-        Returns:
-        - x_pred: Predicted state (shape: (state_dim,))
-        - P_pred: Predicted covariance (shape: (state_dim, state_dim))
-        """
-        x_theta_t_tm1 = self.A[0] @ self.x[:2*self.M**2] + self.B[0] @ u_k
-        return x_theta_t_tm1
-    
     def predict(self, u_k):
         """
         Predicts the next state and covariance based on the current state and control input.
@@ -93,7 +81,8 @@ class KalmanFilterWithMLE:
         Returns:
         - x_updated: Updated (filtered) state vector after incorporating observation.
         """
-        # Define C
+        # Compute observation matrix C from the state
+        C = x_pred.reshape(self.M, self.M)
         
         # Observation prediction
         y_pred = C @ x_pred
@@ -112,7 +101,7 @@ class KalmanFilterWithMLE:
         Computes the negative log-likelihood of the observed data given the parameters.
 
         Parameters:
-        - params: Flattened array of parameters A, B, C for optimization.
+        - params: Flattened array of parameters A and B for optimization.
         - Y: Sequence of observations (shape: (obs_dim, time_steps))
         - U: Sequence of control inputs (shape: (control_dim, time_steps))
 
@@ -121,7 +110,7 @@ class KalmanFilterWithMLE:
         """
         # Unpack parameters from flat array
         A = params[:self.state_dim**2].reshape(self.state_dim, self.state_dim)
-        B = params[self.state_dim**2:self.state_dim**2 + self.state_dim * self.control_dim].reshape(self.state_dim, self.control_dim)
+        B = params[self.state_dim**2:].reshape(self.state_dim, self.control_dim)
         
         # Initialize/reset state and covariance
         self.reset()
@@ -134,7 +123,8 @@ class KalmanFilterWithMLE:
             
             # Predict step
             x_pred, P_pred = self._predict_step(A, B, u_k)
-            C = 
+            C = x_pred.reshape(self.M, self.M)  # Compute C from x_pred
+            
             # Calculate observation residual
             y_pred = C @ x_pred
             residual = y_k - y_pred
@@ -150,17 +140,17 @@ class KalmanFilterWithMLE:
 
     def fit(self, Y, U):
         """
-        Fits the parameters A, B, and C by maximizing the likelihood of the observed data.
+        Fits the parameters A and B by maximizing the likelihood of the observed data.
 
         Parameters:
         - Y: Observed data sequence (shape: (obs_dim, time_steps))
         - U: Control input sequence (shape: (control_dim, time_steps))
 
         Returns:
-        - Optimized matrices A, B, C after fitting.
+        - Optimized matrices A and B after fitting.
         """
-        # Initial parameter vector as a flattened array of A, B, C
-        initial_params = np.hstack([self.A.ravel(), self.B.ravel(), self.C.ravel()])
+        # Initial parameter vector as a flattened array of A and B
+        initial_params = np.hstack([self.A.ravel(), self.B.ravel()])
         
         # Minimize the negative log-likelihood using scipy's minimize function
         result = minimize(self.log_likelihood, initial_params, args=(Y, U), method='L-BFGS-B')
@@ -168,10 +158,9 @@ class KalmanFilterWithMLE:
         # Reshape optimized parameters back to matrices
         opt_params = result.x
         self.A = opt_params[:self.state_dim**2].reshape(self.state_dim, self.state_dim)
-        self.B = opt_params[self.state_dim**2:self.state_dim**2 + self.state_dim * self.control_dim].reshape(self.state_dim, self.control_dim)
-        self.C = opt_params[self.state_dim**2 + self.state_dim * self.control_dim:].reshape(self.obs_dim, self.state_dim)
+        self.B = opt_params[self.state_dim**2:].reshape(self.state_dim, self.control_dim)
 
-        return self.A, self.B, self.C
+        return self.A, self.B
 
     def filter_step(self, y_k, u_k):
         """

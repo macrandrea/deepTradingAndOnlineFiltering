@@ -1,6 +1,6 @@
 #%%
-import ambiente as amb
-import agente as agt
+import core.ambiente as amb
+import core.agente as agt
 import numpy as np
 from core import KalmanFilter as KF
 import torch
@@ -50,6 +50,15 @@ T = 100
 
 age = agt.Agente(T = T,
                  K = T)
+
+KF_permanent = KF.KalmanFilterWithMLE(M=N_assets, 
+                                      Q=torch.eye(N_assets), 
+                                      R=torch.eye(N_assets)
+                                      )
+KF_temporary = KF.KalmanFilterWithMLE(M=N_assets, 
+                                      Q=torch.eye(N_assets), 
+                                      R=torch.eye(N_assets)
+                                      )
 
 # Simulation over time steps
 for time_step in range(T):
