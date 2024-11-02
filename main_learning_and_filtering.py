@@ -87,8 +87,8 @@ def run_daily_simulation(
                                                     residuals_fundamental_price, residuals_efficient_price, N_assets)
         daily_controls.append(u_t)
 
-        # Efficient price prediction and residuals computation
-        S_tilde_t, S_tilde_hat_t_tm1 = compute_efficient_price(KF_temporary, u_t, S_tm1, true_price_model, impact_t, N_assets)
+        # Perform Kalman filter step for efficient price (KF_temporary)
+        S_tilde_t, S_tilde_hat_t_tm1 = kalman_filter_step(KF_temporary, S_tm1, u_t, true_price_model, impact_t, N_assets, "efficient")
         S_tilde_list.append(S_tilde_t)
         residual_S_tilde = S_tilde_t - S_tilde_hat_t_tm1
         residuals_efficient_price_list.append(residual_S_tilde.item())
@@ -97,29 +97,54 @@ def run_daily_simulation(
         # Update inventory
         inventory -= u_t
 
-        # Fundamental price prediction and residuals computation
-        S_t, S_hat_t_tm1 = compute_fundamental_price(KF_permanent, u_t, S_tm1, true_price_model, impact_t, N_assets)
+        # Perform Kalman filter step for fundamental price (KF_permanent)
+        S_t, S_hat_t_tm1 = kalman_filter_step(KF_permanent, S_tm1, u_t, true_price_model, impact_t, N_assets, "fundamental")
         S_list.append(S_t)
         residual_S = S_t - S_hat_t_tm1
         residuals_fundamental_price_list.append(residual_S.item())
 
     return loss, daily_controls, S_list, S_tilde_list
 
+def kalman_filter_step(KF, S_tm1, u_t, price_model, impact_t, N_assets, price_type):
+    """
+    Performs a single Kalman filter prediction and update step for either the efficient or fundamental price.
+    
+    Parameters:
+    - KF: The Kalman filter instance (either KF_permanent or KF_temporary).
+    - S_tm1: Previous price state.
+    - u_t: Current control input.
+    - price_model: The price model instance.
+    - impact_t: The current impact state.
+    - N_assets: Number of assets.
+    - price_type: Type of price to handle ("efficient" or "fundamental").
+
+    Returns:
+    - S_t: Updated price after applying control and impact.
+    - S_hat_t_tm1: Predicted price before the update.
+    """
+    # Predict the next state and covariance with the Kalman filter
+    x_pred, P_pred = KF.predict(u_t)
+    
+    # Obtain the predicted price (before update)
+    S_hat_t_tm1 = S_tm1 + x_pred.reshape(N_assets, N_assets)
+
+    # Select eta or theta based on price type for generating the new price
+    if price_type == "efficient":
+        impact_component = impact_t[:N_assets**2]
+    else:
+        impact_component = impact_t[N_assets**2:]
+    
+    # Generate the new observed price
+    S_t = price_model.generate_price(S_tm1, impact_component, u_t, noise=True)
+
+    # Update the Kalman filter based on the observed price
+    KF.update(S_t.ravel(), x_pred, P_pred)
+
+    return S_t, S_hat_t_tm1
+
+# Other helper functions remain the same
 def generate_impact_and_control(agent, price_model, imp_tm1, u_tm1, res_fundamental_price, res_efficient_price, N_assets):
     impact_t = price_model.evolve_hidden_state(imp_tm1, u_tm1)
     u_t = agent.generate_control(res_fundamental_price, res_efficient_price)
     return impact_t, u_t
 
-def compute_efficient_price(KF, u_t, S_tm1, price_model, impact_t, N_assets):
-    x_eta_t_tm1, _ = KF.predict(u_t)
-    S_tilde_hat_t_tm1 = S_tm1 + x_eta_t_tm1.reshape(N_assets, N_assets)
-    eta_tm1 = impact_t[:N_assets**2]
-    S_tilde_t = price_model.generate_price(S_tm1, eta_tm1, u_t, noise=True)
-    return S_tilde_t, S_tilde_hat_t_tm1
-
-def compute_fundamental_price(KF, u_t, S_tm1, price_model, impact_t, N_assets):
-    x_theta_t_tm1, _ = KF.predict(u_t)
-    S_hat_t_tm1 = S_tm1 + x_theta_t_tm1.reshape(N_assets, N_assets)
-    theta_tm1 = impact_t[N_assets**2:]
-    S_t = price_model.generate_price(S_tm1, theta_tm1, u_t, noise=True)
-    return S_t, S_hat_t_tm1
