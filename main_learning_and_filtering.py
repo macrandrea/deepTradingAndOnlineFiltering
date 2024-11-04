@@ -5,23 +5,23 @@ import torch.optim as optim
 from core import KalmanFilter as KF
 from core import ambiente as amb
 from core import agente as agt
-
+from core import utils as utils
 
 def main_simulation(T=100, K=10, N_assets=3, q0=100, sigma_noise_impact=0.01, sigma_noise_price = 0.01):
     
     # Initialize inventory and previous control action
     inventory = q0 * torch.abs(torch.randn(N_assets))
     u_tm1 = torch.zeros(N_assets)
+    
 
     # Generate T true price models, one for each day
-    true_price_models = initialize_true_price_models(T, N_assets, sigma_noise_impact, sigma_noise_price)
+    true_price_models, B_list = initialize_true_price_models(T, N_assets, sigma_noise_impact, sigma_noise_price)
 
     # Initialize agent
     agent = agt.Agente(K=K)
     
     # Initial state variables
     S_tm1 = np.ones((N_assets, 1)) * 100
-    impact_tm1 = np.random.randn(N_assets**2)
     residuals_fundamental, residuals_efficient = 10.0, 10.0
 
     # Storage for simulation results
@@ -33,7 +33,7 @@ def main_simulation(T=100, K=10, N_assets=3, q0=100, sigma_noise_impact=0.01, si
     # Simulation loop over time steps
     for t in range(T):
         true_price_model = true_price_models[t]  # Select the model for the current day
-        
+        impact_tm1 = B_list[t]
         loss, daily_controls, S_list, S_tilde_list = run_daily_simulation(
             K, agent, true_price_model, S_tm1, impact_tm1, u_tm1, KF_permanent, KF_temporary, 
             residuals_fundamental_price_list, residuals_efficient_price_list, 
@@ -55,12 +55,22 @@ def main_simulation(T=100, K=10, N_assets=3, q0=100, sigma_noise_impact=0.01, si
 # Create T true price models, one for each day
 def initialize_true_price_models(T, N_assets, sigma_noise_impact, sigma_noise_price):
     true_price_models = []
+    B_list = []
     for _ in range(T):
-        A_true = np.random.randn(N_assets**2, N_assets**2)
-        B_true = np.random.randn(N_assets**2, N_assets)
-        true_price_model = amb.Price(A_true, B_true, sigma_noise_impact, sigma_noise_price, N_assets)
+        X_theta_0 = utils.generate_matrix_with_positive_real_eigenvalues(size=N_assets)
+        X_eta_0 = utils.generate_matrix_with_positive_real_eigenvalues(size=N_assets)
+
+        A_theta_true = utils.construct_decay_matrix(X_0=X_theta_0, decay_type='heterogeneous')
+        A_eta_true = utils.construct_decay_matrix(X_0=X_eta_0, decay_type='heterogeneous')
+        
+        B = torch.abs(torch.randn(N_assets, N_assets))  # Generate new impact matrix
+
+        # Create Price model
+        A = torch.stack([A_theta_true, A_eta_true])
+        true_price_model = amb.Price(A, B, sigma_noise_impact, sigma_noise_price, N_assets)
         true_price_models.append(true_price_model)
-    return true_price_models
+        B_list.append(B)
+    return true_price_models, B_list
 
 def initialize_kalman_filters(N_assets):
     A_theta_init = torch.diag(torch.abs(torch.randn(N_assets, N_assets)))
@@ -103,6 +113,9 @@ def run_daily_simulation(
         residual_S = S_t - S_hat_t_tm1
         residuals_fundamental_price_list.append(residual_S.item())
 
+        impact_tm1 = impact_t
+        u_t = u_tm1
+
     return loss, daily_controls, S_list, S_tilde_list
 
 def kalman_filter_step(KF, S_tm1, u_t, price_model, impact_t, N_assets, price_type):
@@ -143,7 +156,7 @@ def kalman_filter_step(KF, S_tm1, u_t, price_model, impact_t, N_assets, price_ty
     return S_t, S_hat_t_tm1
 
 # Other helper functions remain the same
-def generate_impact_and_control(agent, price_model, imp_tm1, u_tm1, res_fundamental_price, res_efficient_price, N_assets):
+def generate_impact_and_control(agent, price_model, imp_tm1, u_tm1, res_fundamental_price, res_efficient_price):
     impact_t = price_model.evolve_hidden_state(imp_tm1, u_tm1)
     u_t = agent.generate_control(res_fundamental_price, res_efficient_price)
     return impact_t, u_t
