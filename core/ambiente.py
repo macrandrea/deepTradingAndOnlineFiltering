@@ -5,22 +5,77 @@ Created on Thu Nov 31 14:41:00 2024
 @authors: macrandrea - gianlucapalmari
 """
 
-import numpy as np
+import torch
 
-# Price Model simulating true price dynamics
-class Price:
-    def __init__(self, A, B, sigma_impact, sigma_price, N_assets):
-        self.A = A
-        self.B = B
-        self.N_assets = N_assets
-        self.sigma_impact = sigma_impact
-        self.sigma_price = sigma_price
+class PriceModel:
+    def __init__(self, M, A1_init=None, B1_init=None, A2_init=None, B2_init=None,
+                 sigma_x_1=None, sigma_x_2=None, sigma_y_1=None, sigma_y_2=None):
+        # Dimensions
+        self.M = M
+        self.M2 = M ** 2
 
-    def evolve_hidden_state(self, imp_tm1, u_tm1):
-        noise = np.random.normal(0, self.sigma_impact, size=self.N_assets)
-        return self.A @ imp_tm1 + self.B @ u_tm1 + noise
+        # Fixed matrices for each price model
+        self.A1 = A1_init if A1_init is not None else torch.rand((self.M2, self.M2), dtype=torch.float)     # State transition matrix for x1
+        self.A2 = A2_init if A2_init is not None else torch.rand((self.M2, self.M2), dtype=torch.float)     # State transition matrix for x2
+        self.B1 = B1_init if B1_init is not None else torch.rand((self.M2, M), dtype=torch.float)           # Control matrix for x1
+        self.B2 = B2_init if B2_init is not None else torch.rand((self.M2, M), dtype=torch.float)           # Control matrix for x2
 
-    def generate_price(self, S_tm1, theta, u_tm1, noise=True):
-        noise_term = np.random.normal(0, self.sigma_price, size=self.N_assets) if noise else np.zeros(self.N_assets)
-        price = S_tm1 + theta.reshape(self.N_assets, -1) @ u_tm1 + noise_term
-        return price
+        # Initializing state vectors (flattened matrix representation)
+        self.x1_k = torch.zeros(self.M2, dtype=torch.float)             # State vector for price model 1
+        self.x2_k = torch.zeros(self.M2, dtype=torch.float)             # State vector for price model 2
+
+        # Control input 
+        self.u_k = torch.zeros(M, dtype=torch.float)                    # Control input vector
+        
+        # Measurement noise for each price model
+        self.v_k1 = torch.zeros(M, dtype=torch.float)                   # Measurement noise for model 1
+        self.v_k2 = torch.zeros(M, dtype=torch.float)                   # Measurement noise for model 2
+
+        # Noise covariance matrices
+        self.Q_1 = sigma_x_1 * torch.eye(self.M2) if sigma_x_1 is not None else  1.e-4 * torch.eye(self.M2) # Process noise covariance for x1
+        self.Q_2 = sigma_x_2 * torch.eye(self.M2) if sigma_x_2 is not None else  1.e-4 * torch.eye(self.M2) # Process noise covariance for x2
+        self.R_1 = sigma_y_1 * torch.eye(self.M) if sigma_x_1 is not None else  1.e-2 * torch.eye(self.M)   # Measurement noise covariance for model 1
+        self.R_2 = sigma_y_2 * torch.eye(self.M) if sigma_x_1 is not None else  1.e-2 * torch.eye(self.M) # Measurement noise covariance for model 2
+
+    def update_states(self):
+        """
+        Prediction step for each state vector.
+        `x1` and `x2` are updated independently using A1, A2, B1, and B2.
+        """
+
+        # noise generation
+        noise_x_1 = self.Q_1 @ torch.randn(self.M2)
+        noise_x_2 = self.Q_2 @ torch.randn(self.M2)
+
+        # Update x1 using A1, B1, control input, and process noise
+        self.x1_k = self.A1 @ self.x1_k + self.B1 @ self.u_k + noise_x_1
+        
+        # Update x2 using A2, B2, control input, and process noise
+        self.x2_k = self.A2 @ self.x2_k + self.B2 @ self.u_k + noise_x_2
+    
+    def update_returns(self):
+        """
+        Update_returns y1 and y2 based on current states x1 and x2.
+        Reshapes `x1` as `C1` and uses `C2` separately.
+        """
+
+        # noise generation
+        noise_y_1 = self.R_1 @ torch.randn(self.M)
+        noise_y_2 = self.R_2 @ torch.randn(self.M)
+
+        # Create output matrices based on current states
+        C1 = self.x1_k.view(self.M, self.M)  # Reshape x1_k as output matrix for y1
+        C2 = self.x2_k.view(self.M, self.M)  # Reshape x2_k as output matrix for y2
+        
+        # Output y1 and y2 based on current states and measurement noise
+        y1 = C1 @ self.u_k + noise_y_1
+        y2 = C2 @ self.u_k + noise_y_2
+
+        return y1, y2
+
+    def update_control(self, new_control_input):
+        """
+        Updates the control input for the next time step.
+        """
+        self.u_k = new_control_input
+ 
