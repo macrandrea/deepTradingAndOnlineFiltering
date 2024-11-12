@@ -1,198 +1,130 @@
+import torch
 import numpy as np
 from scipy.optimize import minimize
 
-class KalmanFilterWithMLE:
+class KalmanFilter:
     def __init__(self, M, A_init=None, B_init=None, Q=None, R=None):
         """
-        Initializes the Kalman Filter with dimensions and noise covariances.
+        Initialize the Kalman Filter with dimensions and noise covariances.
 
         Parameters:
         - M: Dimension parameter for control and observation vectors.
-        - Q: Process noise covariance matrix (shape: (2*M^2, 2*M^2)).
-        - R: Measurement noise covariance matrix (shape: (M, M)).
+        - Q: Process noise covariance matrix (torch.Tensor, shape: (M^2, M^2)).
+        - R: Measurement noise covariance matrix (torch.Tensor, shape: (M, M)).
         """
-        # Model dimensions
         self.M = M
-        self.state_dim = M**2  # Dimension of the state vector x
-        self.control_dim = M       # Dimension of the control vector u
-        self.obs_dim = M           # Dimension of the observation vector y
+        self.state_dim = M ** 2
+        self.control_dim = M
+        self.obs_dim = M
 
-        # Initial state and covariance
-        self.x = np.zeros(self.state_dim)
-        self.P = np.eye(self.state_dim)
-        self.Q = Q                 # Process noise covariance
-        self.R = R                 # Measurement noise covariance
+        # Initialize state and covariance with torch tensors
+        self.x = torch.zeros(self.state_dim)  # Initial state
+        self.P = torch.eye(self.state_dim)    # Initial covariance
+        self.Q = Q if Q is not None else torch.eye(self.state_dim)  # Process noise
+        self.R = R if R is not None else torch.eye(self.obs_dim)    # Measurement noise
 
         # Initialize matrices A and B for MLE estimation
-        if self.A is None:
-            self.A = np.random.randn(self.state_dim, self.state_dim)
-        else: 
-            self.A = A_init
-        if self.B is None:
-            self.B = np.random.randn(self.state_dim, self.control_dim)
-        else:
-            self.B = B_init
+        self.A = A_init if A_init is not None else torch.randn(self.state_dim, self.state_dim)
+        self.B = B_init if B_init is not None else torch.randn(self.state_dim, self.control_dim)
 
     def reset(self, initial_state=None, initial_covariance=None):
-        """
-        Resets the filter's state and covariance to specified initial values.
-
-        Parameters:
-        - initial_state: Optional, initial state vector (default: zero vector).
-        - initial_covariance: Optional, initial state covariance matrix (default: identity matrix).
-        """
-        self.x = initial_state if initial_state is not None else np.zeros(self.state_dim)
-        self.P = initial_covariance if initial_covariance is not None else np.eye(self.state_dim)
+        """Reset the filter's state and covariance to specified initial values."""
+        self.x = initial_state if initial_state is not None else torch.zeros(self.state_dim)
+        self.P = initial_covariance if initial_covariance is not None else torch.eye(self.state_dim)
 
     def compute_C(self):
-        """
-        Computes the observation matrix C from the current state vector x.
-        Reshapes the last M^2 elements of the state vector x into a (M, M) matrix.
-
-        Returns:
-        - C: Observation matrix derived from the state vector (shape: (M, M))
-        """
-        return self.x.reshape(self.M, self.M)
+        """Reshape the current state vector x into a (M, M) observation matrix."""
+        return self.x.view(self.M, self.M)
 
     def predict(self, u_k):
-        """
-        Predicts the next state and covariance based on the current state and control input.
+        """Predict the next state and covariance based on control input."""
 
-        Parameters:
-        - u_k: Current control input (shape: (control_dim,))
-
-        Returns:
-        - x_pred: Predicted state (shape: (state_dim,))
-        - P_pred: Predicted covariance (shape: (state_dim, state_dim))
-        """
         x_pred = self.A @ self.x + self.B @ u_k
-        P_pred = self.A @ self.P @ self.A.T + self.Q
+        P_pred = self.A @ self.P @ self.A.mT + self.Q
         return x_pred, P_pred
-
-    def update(self, y_k, x_pred, P_pred):
-        """
-        Updates the state and covariance based on the observation.
-
-        Parameters:
-        - y_k: Observation at the current time step (shape: (obs_dim,))
-        - x_pred: Predicted state from the predict step (shape: (state_dim,))
-        - P_pred: Predicted covariance from the predict step (shape: (state_dim, state_dim))
-
-        Returns:
-        - x_updated: Updated (filtered) state vector after incorporating observation.
-        """
-        # Compute observation matrix C from the state
-        C = x_pred.reshape(self.M, self.M)
-        
-        # Observation prediction
-        y_pred = C @ x_pred
-        # Innovation covariance
-        S = C @ P_pred @ C.T + self.R
-        # Kalman gain
-        K = P_pred @ C.T @ np.linalg.inv(S)
-
-        # State update with Kalman gain
+    
+    def update(self, y_k, x_pred, P_pred, u_k):
+        """Update state and covariance with the current observation."""
+        H = torch.kron(u_k.unsqueeze(0), torch.eye(self.M, device=u_k.device))  # Observation matrix from control
+        y_pred = H @ x_pred  # Observation prediction (without reshaping x_pred)
+        S = H @ P_pred @ H.T + self.R  # Innovation covariance
+        K = P_pred @ H.T @ torch.linalg.inv(S)  # Kalman gain
+        # Update state and covariance
         self.x = x_pred + K @ (y_k - y_pred)
-        self.P = (np.eye(self.state_dim) - K @ C) @ P_pred
+        self.P = (torch.eye(self.state_dim, device=u_k.device) - K @ H) @ P_pred
         return self.x
 
-    def log_likelihood(self, params, Y, U):
-        """
-        Computes the negative log-likelihood of the observed data given the parameters.
-
-        Parameters:
-        - params: Flattened array of parameters A and B for optimization.
-        - Y: Sequence of observations (shape: (obs_dim, time_steps))
-        - U: Sequence of control inputs (shape: (control_dim, time_steps))
-
-        Returns:
-        - Negative log-likelihood of the observations given the parameters.
-        """
-        # Unpack parameters from flat array
-        A = params[:self.state_dim**2].reshape(self.state_dim, self.state_dim)
-        B = params[self.state_dim**2:].reshape(self.state_dim, self.control_dim)
-        
-        # Initialize/reset state and covariance
-        self.reset()
-
-        log_likelihood = 0.0
-        # Iterate over the time steps
-        for t in range(Y.shape[1]):
-            y_k = Y[:, t]
-            u_k = U[:, t]
-            
-            # Predict step
-            x_pred, P_pred = self._predict_step(A, B, u_k)
-            C = x_pred.reshape(self.M, self.M)  # Compute C from x_pred
-            
-            # Calculate observation residual
-            y_pred = C @ x_pred
-            residual = y_k - y_pred
-            # Innovation covariance
-            S = C @ P_pred @ C.T + self.R
-            # Log-likelihood contribution for this step
-            log_likelihood += -0.5 * (residual.T @ np.linalg.inv(S) @ residual + np.log(np.linalg.det(S)))
-            
-            # Update step
-            self._update_step(C, residual, x_pred, P_pred, S)
-
-        return -log_likelihood
-
     def fit(self, Y, U):
-        """
-        Fits the parameters A and B by maximizing the likelihood of the observed data.
+        """Fit the A and B matrices by maximizing the likelihood of observations."""
+        def log_likelihood(params, Y, U):
+            # Convert parameters to torch tensors without requiring gradients
+            A = torch.tensor(params[:self.state_dim**2].reshape(self.state_dim, self.state_dim), requires_grad=False)
+            B = torch.tensor(params[self.state_dim**2:].reshape(self.state_dim, self.control_dim), requires_grad=False)
+            self.reset()  # Reset state and covariance for the fitting
 
-        Parameters:
-        - Y: Observed data sequence (shape: (obs_dim, time_steps))
-        - U: Control input sequence (shape: (control_dim, time_steps))
+            log_likelihood = 0.0
+            Y_torched = torch.tensor(Y)
+            U_torched = torch.tensor(U)
+            for t in range(Y_torched.shape[1]):
+                y_k = Y_torched[t]
+                u_k = U_torched[t]
 
-        Returns:
-        - Optimized matrices A and B after fitting.
-        """
-        # Initial parameter vector as a flattened array of A and B
-        initial_params = np.hstack([self.A.ravel(), self.B.ravel()])
-        
-        # Minimize the negative log-likelihood using scipy's minimize function
-        result = minimize(self.log_likelihood, initial_params, args=(Y, U), method='L-BFGS-B')
-        
-        # Reshape optimized parameters back to matrices
+                # Prediction step
+                x_pred, P_pred = self._predict_step(A, B, u_k)
+                H = torch.kron(u_k.unsqueeze(0), torch.eye(self.M, device=u_k.device))
+                y_pred = H @ x_pred  # Avoid reshaping x_pred here
+                residual = y_k - y_pred
+
+                # Innovation covariance
+                S = H @ P_pred @ H.T + self.R
+                log_det_S = torch.linalg.slogdet(S)[1]  # More stable log-det calculation
+                log_likelihood -= 0.5 * (residual.T @ torch.linalg.inv(S) @ residual + log_det_S)
+
+                # Update step
+                self._update_step(H, residual, x_pred, P_pred, S)
+            return -log_likelihood.item()  # Convert to a scalar for scipy.optimize
+        # Flatten initial parameters as a numpy array for scipy.optimize
+        initial_params = np.hstack([self.A.numpy().ravel(), self.B.numpy().ravel()])
+        result = minimize(log_likelihood, initial_params, args=(Y, U), method='L-BFGS-B')
+
+        # Update A and B matrices with optimized values
         opt_params = result.x
-        self.A = opt_params[:self.state_dim**2].reshape(self.state_dim, self.state_dim)
-        self.B = opt_params[self.state_dim**2:].reshape(self.state_dim, self.control_dim)
+        self.A = torch.tensor(opt_params[:self.state_dim**2].reshape(self.state_dim, self.state_dim), dtype=torch.float32)
+        self.B = torch.tensor(opt_params[self.state_dim**2:].reshape(self.state_dim, self.control_dim), dtype=torch.float32)
 
-        return self.A, self.B
-
-    def filter_step(self, y_k, u_k):
-        """
-        Executes a single filtering step with the current observation and control input.
-
-        Parameters:
-        - y_k: Current observation (shape: (obs_dim,))
-        - u_k: Current control input (shape: (control_dim,))
-
-        Returns:
-        - x_filtered: Updated state estimate.
-        - state_residual: Residual (difference between filtered and predicted state).
-        """
-        # Predict state and covariance
-        x_pred, P_pred = self.predict(u_k)
-        
-        # Update state based on current observation
-        x_filtered = self.update(y_k, x_pred, P_pred)
-        
-        # Compute residual (difference between filtered and predicted state)
-        state_residual = x_filtered - x_pred
-        
-        return x_filtered, state_residual
-    
     def _predict_step(self, A, B, u_k):
-        """Helper function for internal predict step during likelihood calculation."""
+        """Helper for internal predict step during likelihood calculation."""
         x_pred = A @ self.x + B @ u_k
         P_pred = A @ self.P @ A.T + self.Q
         return x_pred, P_pred
 
-    def _update_step(self, C, residual, x_pred, P_pred, S):
-        """Helper function for internal update step during likelihood calculation."""
-        K = P_pred @ C.T @ np.linalg.inv(S)
+    def _update_step(self, H, residual, x_pred, P_pred, S):
+        """Helper for internal update step during likelihood calculation."""
+        K = P_pred @ H.T @ torch.linalg.inv(S)
         self.x = x_pred + K @ residual
-        self.P = (np.eye(self.state_dim) - K @ C) @ P_pred
+        self.P = (torch.eye(self.state_dim) - K @ H) @ P_pred
+
+class DualKalmanFilterSystem:
+    def __init__(self, M, A1_init=None, B1_init=None, A2_init=None, B2_init=None, Q1=None, R1=None, Q2=None, R2=None):
+        """Initialize dual Kalman filters for two separate models."""
+        self.kf1 = KalmanFilter(M, A_init=A1_init, B_init=B1_init, Q=Q1, R=R1)
+        self.kf2 = KalmanFilter(M, A_init=A2_init, B_init=B2_init, Q=Q2, R=R2)
+
+    def predict(self, u_k):
+        """Predict the next states for both filters."""
+        x1_pred, P1_pred = self.kf1.predict(u_k)
+        x2_pred, P2_pred = self.kf2.predict(u_k)
+        return (x1_pred, P1_pred), (x2_pred, P2_pred)
+
+    def update(self, y_k1, y_k2, x1_pred, P1_pred, x2_pred, P2_pred):
+        """Update the states of both filters based on their respective observations."""
+        x1_updated = self.kf1.update(y_k1, x1_pred, P1_pred)
+        x2_updated = self.kf2.update(y_k2, x2_pred, P2_pred)
+        return x1_updated, x2_updated
+
+    def filter_step(self, y_k1, y_k2, u_k):
+        """Executes a filtering step for both filters with their respective observations and control input."""
+        (x1_pred, P1_pred), (x2_pred, P2_pred) = self.predict(u_k)
+        x1_filtered = self.kf1.update(y_k1, x1_pred, P1_pred)
+        x2_filtered = self.kf2.update(y_k2, x2_pred, P2_pred)
+        return x1_filtered, x2_filtered
