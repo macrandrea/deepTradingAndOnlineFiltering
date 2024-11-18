@@ -11,8 +11,8 @@ class PriceModel:
     def __init__(self, M, A1_init=None, B1_init=None, A2_init=None, B2_init=None,
                  sigma_x_1=None, sigma_x_2=None, sigma_y_1=None, sigma_y_2=None):
         # Dimensions
-        self.M = M
-        self.M2 = M ** 2
+        self.M = M # Num assets 
+        self.M2 = M ** 2 
 
         # Fixed matrices for each price model
         self.A1 = A1_init if A1_init is not None else torch.rand((self.M2, self.M2), dtype=torch.float)     # State transition matrix for x1
@@ -21,8 +21,8 @@ class PriceModel:
         self.B2 = B2_init if B2_init is not None else torch.rand((self.M2, M), dtype=torch.float)           # Control matrix for x2
 
         # Initializing state vectors (flattened matrix representation)
-        self.x1_k = torch.zeros(self.M2, dtype=torch.float)             # State vector for price model 1
-        self.x2_k = torch.zeros(self.M2, dtype=torch.float)             # State vector for price model 2
+        self.x1_k = 1.e-3 * torch.ones(self.M2, dtype=torch.float)             # State vector for price model 1
+        self.x2_k = 1.e-3 * torch.ones(self.M2, dtype=torch.float)             # State vector for price model 2
 
         # Control input 
         self.u_k = torch.zeros(M, dtype=torch.float)                    # Control input vector

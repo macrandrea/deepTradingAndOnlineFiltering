@@ -6,23 +6,33 @@ from core import KalmanFilter as KF
 from core import ambiente as amb
 from core import agente as agt
 from core import utils as utils
+import matplotlib.pyplot as plt
+
 
 # Create T true price models, one for each day
-def initialize_true_price_models(T, N_assets, sigma_noise_impact, sigma_noise_price):
+def initialize_true_price_models(T, N_assets, sigma_noise_impact, sigma_noise_price, test='Almgren_and_Chriss'):
     true_price_models = []
     for _ in range(T):
         X_theta_0 = utils.generate_matrix_with_positive_real_eigenvalues(size=N_assets**2)
         X_eta_0 = utils.generate_matrix_with_positive_real_eigenvalues(size=N_assets**2)
 
-        A_theta_true = utils.construct_decay_matrix(X_0=X_theta_0, decay_type='heterogeneous')
-        A_theta_true_torched = torch.tensor(A_theta_true, dtype=torch.float)
-        A_eta_true = utils.construct_decay_matrix(X_0=X_eta_0, decay_type='heterogeneous')
-        A_eta_true_torched = torch.tensor(A_eta_true, dtype=torch.float)
-
-        B_theta_torched = torch.abs(torch.randn(N_assets**2, N_assets))
-        B_eta_torched = torch.abs(torch.randn(N_assets**2, N_assets))  # Generate new impact matrix
+        if test == 'Almgren_and_Chriss':
         
+            A_theta_true_torched = torch.eye(N_assets**2, dtype=torch.float)
+            A_eta_true_torched = torch.eye(N_assets**2, dtype=torch.float)
 
+            B_theta_torched = torch.zeros(N_assets**2, N_assets) 
+            B_eta_torched = torch.zeros(N_assets**2, N_assets) 
+
+        else: 
+            A_theta_true = utils.construct_decay_matrix(X_0=X_theta_0, decay_type='heterogeneous')  * 1.e-2
+            A_theta_true_torched = torch.tensor(A_theta_true, dtype=torch.float)
+            A_eta_true = utils.construct_decay_matrix(X_0=X_eta_0, decay_type='heterogeneous') * 1.e-2
+            A_eta_true_torched = torch.tensor(A_eta_true, dtype=torch.float)
+
+            B_theta_torched = torch.abs(torch.randn(N_assets**2, N_assets))
+            B_eta_torched = torch.abs(torch.randn(N_assets**2, N_assets))  # Generate new impact matrix
+        
         # Create Price model
         true_price_model = amb.PriceModel(M=N_assets, A1_init=A_theta_true_torched, B1_init=B_theta_torched,
                                     A2_init=A_eta_true_torched, B2_init=B_eta_torched,
@@ -33,26 +43,36 @@ def initialize_true_price_models(T, N_assets, sigma_noise_impact, sigma_noise_pr
     
     return true_price_models
 
-def initialize_kalman_filters(N_assets):
+def initialize_kalman_filters(N_assets, test='Almgren_and_Chriss'):
     X_theta_0 = utils.generate_matrix_with_positive_real_eigenvalues(size=N_assets**2)
     X_eta_0 = utils.generate_matrix_with_positive_real_eigenvalues(size=N_assets**2)
 
-    A_theta_init = utils.construct_decay_matrix(X_0=X_theta_0, decay_type='heterogeneous')
-    A_theta_init_torched = torch.tensor(A_theta_init, dtype=torch.float)
-    A_eta_init = utils.construct_decay_matrix(X_0=X_eta_0, decay_type='heterogeneous')
-    A_eta_init_torched = torch.tensor(A_eta_init, dtype=torch.float)
+    if test == 'Almgren_and_Chriss':
+        
+        A_theta_init_torched = torch.eye(N_assets**2, dtype=torch.float)
+        A_eta_init_torched = torch.eye(N_assets**2, dtype=torch.float)
 
-    B_theta_init_torched = torch.abs(torch.randn(N_assets**2, N_assets))
-    B_eta_init_torched = torch.abs(torch.randn(N_assets**2, N_assets))  # Generate new impact matrix
-    
+        B_theta_init_torched = torch.zeros(N_assets**2, N_assets) 
+        B_eta_init_torched = torch.zeros(N_assets**2, N_assets) 
+        
+    else:
+        A_theta_init = utils.construct_decay_matrix(X_0=X_theta_0, decay_type='heterogeneous')
+        A_theta_init_torched = torch.tensor(A_theta_init, dtype=torch.float)
+        A_eta_init = utils.construct_decay_matrix(X_0=X_eta_0, decay_type='heterogeneous')
+        A_eta_init_torched = torch.tensor(A_eta_init, dtype=torch.float)
+
+        B_theta_init_torched = torch.abs(torch.randn(N_assets**2, N_assets))
+        B_eta_init_torched = torch.abs(torch.randn(N_assets**2, N_assets))  # Generate new impact matrix
+        
     KF_permanent = KF.KalmanFilter(M=N_assets, A_init=A_theta_init_torched, B_init=B_theta_init_torched, Q=  torch.eye(N_assets**2), R=0.01 *torch.eye(N_assets))
     KF_temporary = KF.KalmanFilter(M=N_assets, A_init=A_eta_init_torched, B_init=B_eta_init_torched, Q=0.01 *torch.eye(N_assets**2), R=0.01 *torch.eye(N_assets))
 
     return KF_permanent, KF_temporary
 
+
 # Other helper functions remain the same
-def generate_control(agent, res_fundamental_price, res_efficient_price):
-    u_t = agent.generate_control(res_fundamental_price.detach(), res_efficient_price.detach())
+def generate_control(agent, res_fundamental_price, res_efficient_price, remaining_inventory, time_step):
+    u_t = agent.generate_control(res_fundamental_price.detach(), res_efficient_price.detach(), remaining_inventory.detach(), time_step.detach())
     return u_t
 
 def kalman_filter_step(KF, S_tm1, u_t, N_assets):
@@ -79,7 +99,7 @@ def kalman_filter_step(KF, S_tm1, u_t, N_assets):
 def run_daily_simulation(
     K, agent, true_price_model, S_0, KF_permanent, KF_temporary,
     residuals_fundamental_price, residuals_efficient_price, 
-    inventory, N_assets, lamda=10.
+    inventory, N_assets, lamda=1000.
 ):
     """
     Runs a daily simulation for a trading agent interacting with a true price model,
@@ -122,11 +142,11 @@ def run_daily_simulation(
     x_predicted_efficient_list = []
     x_filtered_fundamental_list = []
     x_filtered_efficient_list = []
-    q0 = inventory
+
     # Iterate over each time step in the daily simulation
     for k in range(K):
         # Generate control input based on residuals and the agent's strategy
-        u_t = generate_control(agent, residuals_fundamental_price, residuals_efficient_price)
+        u_t = generate_control(agent, residuals_fundamental_price, residuals_efficient_price, torch.tensor(inventory), torch.tensor([k/K]))
         daily_controls.append(u_t.detach().tolist())
         true_price_model.update_control(u_t)
         #print(u_t)
@@ -149,8 +169,8 @@ def run_daily_simulation(
 
         # Compute real price change using the true price model
         r_tilde_t, r_t = true_price_model.update_returns()
-        S_t_efficient = S_t_efficient + r_tilde_t
-        S_t_fundamental = S_t_fundamental + r_t
+        S_t_efficient = S_t_efficient + r_t
+        S_t_fundamental = S_t_fundamental + r_tilde_t
         S_efficient_list.append(S_t_efficient.detach().tolist())
         S_fundamental_list.append(S_t_fundamental.detach().tolist())
 
@@ -179,7 +199,7 @@ def run_daily_simulation(
 
     # Stack daily_controls to form a tensor of shape (K, num_assets)
     daily_controls_tensor = torch.tensor(daily_controls, dtype=torch.float)  # Shape: (K, num_assets)
-    print(daily_controls_tensor)
+    #print(daily_controls_tensor)
     # Sum across assets to get a (K,) tensor
     assets_sum = daily_controls_tensor.sum(dim=1)  # Shape: (K,)
     # Expand assets_sum to match the shape of daily_controls_tensor
@@ -195,20 +215,58 @@ def run_daily_simulation(
         x_predicted_efficient_list, x_filtered_fundamental_list, x_filtered_efficient_list
     )
 
+def plot_fundamental_prices(list_real_price, list_predicted_price):
+    """
+    Plots the first and second elements of two lists in a two-row, one-column layout.
 
-def main_simulation(T=2, K=100, N_assets=2, q0=100, sigma_noise_impact=1.e-5, sigma_noise_price = 1.e-5):
+    Parameters:
+    - list1: List of arrays or values for the first plot.
+    - list2: List of arrays or values for the second plot.
+    - title1: Title for the first plot (default: "First List").
+    - title2: Title for the second plot (default: "Second List").
+    """
+    if len(list_real_price) != len(list_predicted_price):
+        raise ValueError("Both lists must have the same length.")
+    
+    fundamental_prices_np = np.array(list_real_price)
+    fundamental_hat_prices_np = np.array(list_predicted_price)
+    
+    fig, axs = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
+    
+    # Plot the first elements of the lists
+    axs[0].plot(fundamental_prices_np[:,0], label=f'real')
+    axs[0].plot(fundamental_hat_prices_np[:,0], label=f'model', linestyle='--')
+    axs[0].legend()
+    axs[0].grid(True)
+
+    # Plot the second elements of the lists
+    axs[1].plot(fundamental_prices_np[:,1], label=f'real')
+    axs[1].plot(fundamental_hat_prices_np[:,1], label=f'model', linestyle='--')
+    axs[1].legend()
+    axs[1].grid(True)
+
+    # Final adjustments
+    axs[1].set_xlabel("Time step")
+    fig.tight_layout()
+    plt.show()
+
+
+def main_simulation(T=10, K=100, N_assets=2, q0=1, sigma_noise_impact=1.e-5, sigma_noise_price = 1.e-5):
     
     # Initialize inventory and previous control action
-    inventory = q0 * torch.abs(torch.randn(N_assets))
+    inventory = q0 * torch.ones(N_assets)
     
     # Generate T true price models, one for each day
     true_price_models = initialize_true_price_models(T, N_assets, sigma_noise_impact, sigma_noise_price)
 
-    # Initialize agent
-    agent = agt.Agent(K=K, 
-                      in_size=2*N_assets, 
-                      out_size=N_assets
-                      )
+    # Initialize agent 
+    agent = agt.Agent(q0=q0,
+                      K=K, 
+                      in_size=3*N_assets+1, 
+                      out_size=N_assets,
+                      learning_rate=1.e-5,
+                      l2_radius=0.1,
+                      lipschitz_constant=0.9)
     
     # Initial state variables
     S_0 = torch.ones(N_assets) * 100.
@@ -236,18 +294,19 @@ def main_simulation(T=2, K=100, N_assets=2, q0=100, sigma_noise_impact=1.e-5, si
             inventory=inventory, 
             N_assets=N_assets
         )
-
+        print(torch.sum(torch.tensor(daily_controls)))
         # Train agent with accumulated loss and save state
         agent.train(loss)
         agents.append(agent)
 
         # Create a new agent with the same parameters
-        new_agent = agt.Agent(
-            K=K,
-            in_size=2*N_assets,  
-            out_size=N_assets,  
-            learning_rate=agent.optimizer.param_groups[0]['lr']
-        )
+        new_agent = agent = agt.Agent(q0=q0,
+                      K=K, 
+                      in_size=3*N_assets+1, 
+                      out_size=N_assets,
+                      learning_rate=agent.optimizer.param_groups[0]['lr'],
+                      l2_radius=0.1,
+                      lipschitz_constant=0.9)
 
         # Copy the neural network weights from the current agent to the new agent
         new_agent.nn.load_state_dict(agent.nn.state_dict())
@@ -255,9 +314,19 @@ def main_simulation(T=2, K=100, N_assets=2, q0=100, sigma_noise_impact=1.e-5, si
         # Update agent reference to the new agent
         agent = new_agent
 
+        S_fundamental_torch = torch.tensor(S_fundamental_list)
+        S_hat_fundamental_torch = torch.tensor(S_hat_fundamental_list)
+
+        S_efficient_torch = torch.tensor(S_efficient_list)
+        S_hat_efficient_torch = torch.tensor(S_hat_efficient_list)
+
+        residuals_fundamental = torch.mean(S_fundamental_torch - S_hat_fundamental_torch, axis=0)
+        residuals_efficient = torch.mean(S_efficient_torch - S_hat_efficient_torch, axis=0)
+        
+        plot_fundamental_prices(S_fundamental_list, S_hat_fundamental_list)
         # Fit Kalman Filters for the next day's parameters
-        KF_permanent.fit(Y=S_fundamental_list, U=daily_controls)
-        KF_temporary.fit(Y=S_efficient_list, U=daily_controls)
+        #KF_permanent.fit(Y=S_fundamental_list, U=daily_controls)
+        #KF_temporary.fit(Y=S_efficient_list, U=daily_controls)
         
         # Record daily controls
         total_controls.append(daily_controls)
@@ -278,7 +347,6 @@ def main_simulation(T=2, K=100, N_assets=2, q0=100, sigma_noise_impact=1.e-5, si
     # Convert it to a NumPy array for easier plotting with matplotlib if necessary
     total_controls_np = np.array(total_controls)
 
-    print(total_controls_np)
 
     T, K, N_assets = total_controls_np.shape
 
