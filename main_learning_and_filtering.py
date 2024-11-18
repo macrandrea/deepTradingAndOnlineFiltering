@@ -8,7 +8,6 @@ from core import agente as agt
 from core import utils as utils
 import matplotlib.pyplot as plt
 
-
 # Create T true price models, one for each day
 def initialize_true_price_models(T, N_assets, sigma_noise_impact, sigma_noise_price, test='Almgren_and_Chriss'):
     true_price_models = []
@@ -132,6 +131,8 @@ def run_daily_simulation(
     daily_controls = []
     S_efficient_list = []
     S_fundamental_list = []
+    r_efficient_list = []
+    r_fundamental_list = []
     S_hat_efficient_list = []
     S_hat_fundamental_list = []
     S_t_efficient = S_0
@@ -173,6 +174,8 @@ def run_daily_simulation(
         S_t_fundamental = S_t_fundamental + r_tilde_t
         S_efficient_list.append(S_t_efficient.detach().tolist())
         S_fundamental_list.append(S_t_fundamental.detach().tolist())
+        r_efficient_list.append(r_tilde_t.detach().tolist())
+        r_fundamental_list.append(r_t.detach().tolist())
 
         # Update true price model states
         true_price_model.update_states()
@@ -212,7 +215,8 @@ def run_daily_simulation(
     return (
         loss, daily_controls, S_efficient_list, S_fundamental_list,
         S_hat_efficient_list, S_hat_fundamental_list, x_predicted_fundamental_list, 
-        x_predicted_efficient_list, x_filtered_fundamental_list, x_filtered_efficient_list
+        x_predicted_efficient_list, x_filtered_fundamental_list, x_filtered_efficient_list, 
+        r_fundamental_list, r_efficient_list
     )
 
 def plot_fundamental_prices(list_real_price, list_predicted_price):
@@ -282,7 +286,7 @@ def main_simulation(T=10, K=100, N_assets=2, q0=1, sigma_noise_impact=1.e-5, sig
     for t in range(T):
         print('new trading day')
         true_price_model = true_price_models[t]  # Select the model for the current day
-        loss, daily_controls, S_efficient_list, S_fundamental_list, S_hat_efficient_list, S_hat_fundamental_list, x_predicted_fundamental_list, x_predicted_efficient_list, x_filtered_fundamental_list, x_filtered_efficient_list = run_daily_simulation(
+        loss, daily_controls, S_efficient_list, S_fundamental_list, S_hat_efficient_list, S_hat_fundamental_list, x_predicted_fundamental_list, x_predicted_efficient_list, x_filtered_fundamental_list, x_filtered_efficient_list, r_fundamental_list, r_efficient_list = run_daily_simulation(
             K=K, 
             agent=agent, 
             true_price_model=true_price_model, 
@@ -294,7 +298,6 @@ def main_simulation(T=10, K=100, N_assets=2, q0=1, sigma_noise_impact=1.e-5, sig
             inventory=inventory, 
             N_assets=N_assets
         )
-        print(torch.sum(torch.tensor(daily_controls)))
         # Train agent with accumulated loss and save state
         agent.train(loss)
         agents.append(agent)
@@ -325,8 +328,8 @@ def main_simulation(T=10, K=100, N_assets=2, q0=1, sigma_noise_impact=1.e-5, sig
         
         plot_fundamental_prices(S_fundamental_list, S_hat_fundamental_list)
         # Fit Kalman Filters for the next day's parameters
-        #KF_permanent.fit(Y=S_fundamental_list, U=daily_controls)
-        #KF_temporary.fit(Y=S_efficient_list, U=daily_controls)
+        KF_permanent.fit(Y=r_fundamental_list, U=daily_controls)
+        KF_temporary.fit(Y=r_efficient_list, U=daily_controls)
         
         # Record daily controls
         total_controls.append(daily_controls)
