@@ -39,8 +39,8 @@ class KalmanFilter:
     def predict(self, u_k):
         """Predict the next state and covariance based on control input."""
 
-        x_pred = self.A @ self.x + self.B @ u_k
-        P_pred = self.A @ self.P @ self.A.mT + self.Q
+        x_pred = self.A.float() @ self.x + self.B.float() @ u_k
+        P_pred = self.A.float() @ self.P.float() @ self.A.mT.float() + self.Q.float()
         return x_pred, P_pred
     
     def update(self, y_k, x_pred, P_pred, u_k):
@@ -89,13 +89,13 @@ class KalmanFilter:
 
         # Update A and B matrices with optimized values
         opt_params = result.x
-        self.A = torch.tensor(opt_params[:self.state_dim**2].reshape(self.state_dim, self.state_dim), dtype=torch.float32)
-        self.B = torch.tensor(opt_params[self.state_dim**2:].reshape(self.state_dim, self.control_dim), dtype=torch.float32)
+        self.A = torch.tensor(opt_params[:self.state_dim**2].reshape(self.state_dim, self.state_dim)  )
+        self.B = torch.tensor(opt_params[self.state_dim**2:].reshape(self.state_dim, self.control_dim))
 
     def _predict_step(self, A, B, u_k):
         """Helper for internal predict step during likelihood calculation."""
-        x_pred = A @ self.x + B @ u_k
-        P_pred = A @ self.P @ A.T + self.Q
+        x_pred = A.float() @ self.x + B.float() @ u_k
+        P_pred = A.float() @ self.P.float() @ A.T.float() + self.Q.float()
         return x_pred, P_pred
 
     def _update_step(self, H, residual, x_pred, P_pred, S):
