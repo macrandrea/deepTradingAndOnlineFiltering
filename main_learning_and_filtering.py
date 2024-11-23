@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 # Create T true price models, one for each day
 def initialize_true_price_models(T, N_assets, sigma_noise_impact, sigma_noise_price, test='Almgren_and_Chriss'):
     true_price_models = []
+    #todo: initialising new day's impact with yesteday's impact
     for _ in range(T):
         X_theta_0 = utils.generate_matrix_with_positive_real_eigenvalues(size=N_assets**2)
         X_eta_0 = utils.generate_matrix_with_positive_real_eigenvalues(size=N_assets**2)
@@ -143,12 +144,16 @@ def run_daily_simulation(
     x_predicted_efficient_list = []
     x_filtered_fundamental_list = []
     x_filtered_efficient_list = []
-
+    q0 = inventory
+    sum_us = torch.tensor(0., requires_grad=True)
     # Iterate over each time step in the daily simulation
     for k in range(K):
         # Generate control input based on residuals and the agent's strategy
-        u_t = generate_control(agent, residuals_fundamental_price, residuals_efficient_price, torch.tensor(inventory), torch.tensor([k/K]))
+        u_t = generate_control(agent, residuals_fundamental_price, residuals_efficient_price, 1-torch.tensor(inventory)/q0, torch.tensor([k/K]))
+        #todo: stessa dimensione in tutti gli input di nn
+        
         daily_controls.append(u_t.detach().tolist())
+        sum_us = sum_us + u_t
         true_price_model.update_control(u_t)
         #print(u_t)
         #if k >= 10:
@@ -198,17 +203,17 @@ def run_daily_simulation(
         loss += r_tilde_t @ u_t
 
         # Update inventory based on control action
-        inventory -= u_t
+        inventory += u_t
 
     # Stack daily_controls to form a tensor of shape (K, num_assets)
     daily_controls_tensor = torch.tensor(daily_controls)  # Shape: (K, num_assets)
     #print(daily_controls_tensor)
     # Sum across assets to get a (K,) tensor
-    assets_sum = daily_controls_tensor.sum(dim=1)  # Shape: (K,)
+    assets_sum = daily_controls_tensor.sum(dim=0)  # Shape: (K,)
     # Expand assets_sum to match the shape of daily_controls_tensor
-    assets_sum_expanded = assets_sum.unsqueeze(1).expand_as(daily_controls_tensor)  # Shape: (K, num_assets)
+    #assets_sum_expanded = assets_sum.unsqueeze(1).expand_as(daily_controls_tensor)  # Shape: (K, num_assets)
     # Compute the L2 norm of the difference
-    l2_norm = torch.norm(assets_sum_expanded - daily_controls_tensor, p=2)
+    l2_norm = torch.norm(sum_us - q0, p=2)
     # Update the loss
     loss += lamda * l2_norm
 
@@ -255,7 +260,7 @@ def plot_fundamental_prices(list_real_price, list_predicted_price):
     fig.tight_layout()
     plt.show()
 
-def main_simulation(T=2, K=100, N_assets=2, q0=1, sigma_noise_impact=1.e-5, sigma_noise_price = 1.e-5):
+def main_simulation(T=2, K=1000, N_assets=2, q0=1, sigma_noise_impact=1.e-5, sigma_noise_price = 1.e-5):
     
     # Initialize inventory and previous control action
     inventory = q0 * torch.ones(N_assets)
@@ -323,8 +328,8 @@ def main_simulation(T=2, K=100, N_assets=2, q0=1, sigma_noise_impact=1.e-5, sigm
         S_efficient_torch = torch.tensor(S_efficient_list)
         S_hat_efficient_torch = torch.tensor(S_hat_efficient_list)
 
-        residuals_fundamental = torch.mean(S_fundamental_torch - S_hat_fundamental_torch, axis=0)
-        residuals_efficient = torch.mean(S_efficient_torch - S_hat_efficient_torch, axis=0)
+        residuals_fundamental = (S_fundamental_torch - S_hat_fundamental_torch)[-1]
+        residuals_efficient = (S_efficient_torch - S_hat_efficient_torch)[-1]
         
         plot_fundamental_prices(S_fundamental_list, S_hat_fundamental_list)
         # Fit Kalman Filters for the next day's parameters
@@ -337,12 +342,12 @@ def main_simulation(T=2, K=100, N_assets=2, q0=1, sigma_noise_impact=1.e-5, sigm
         print(daily_controls)
         #print(f'{t + 1} day of trading has been done.')
         #print('New fitter params for KF_permanent are:')
-        #print('A matrix:', KF_permanent.A)
-        #print('B matrix:', KF_permanent.B)
+        print('A matrix:', KF_permanent.A)
+        print('B matrix:', KF_permanent.B)
 
         #print('New fitter params for KF_temporary are:')
-        #print('A matrix:', KF_temporary.A)
-        #print('B matrix:', KF_temporary.B)
+        print('A matrix:', KF_temporary.A)
+        print('B matrix:', KF_temporary.B)
 
     import matplotlib.pyplot as plt
     import matplotlib.animation as animation
@@ -352,48 +357,40 @@ def main_simulation(T=2, K=100, N_assets=2, q0=1, sigma_noise_impact=1.e-5, sigm
     # Convert it to a NumPy array for easier plotting with matplotlib if necessary
     total_controls_np = np.array(total_controls)
 
+    T, K, N_assets = total_controls_np.shape
+    
+    # Assuming total_controls_np is a 3D array with shape (T, K, N_assets)
+    # Example:
+    # total_controls_np = np.random.rand(T, K, N_assets)  # Replace this with your data
 
     T, K, N_assets = total_controls_np.shape
 
-    # Create a figure with 3 rows for each asset
-    fig, axes = plt.subplots(N_assets, 1, figsize=(10, 6), sharex=True)
+    # Set up the figure and axes
+    fig, axes = plt.subplots(T, 1, figsize=(10, 5 * T), sharex=True)
+    if T == 1:  # Handle single subplot case
+        axes = [axes]
 
-    # Set up the x-axis
-    x = np.arange(K)
-
-    # Initialize empty lists to hold lines for each trajectory
-    lines = [[axes[i].plot([], [])[0] for _ in range(T)] for i in range(N_assets)]
-
-    # Update function for animation
-    def update(day):
+    # Plot each day's trajectories
+    for t in range(T):
+        ax = axes[t]
         for asset in range(N_assets):
-            for t in range(day + 1):  # Plot up to the current day incrementally
-                lines[asset][t].set_data(x, total_controls_np[t, :, asset])
-                lines[asset][t].set_alpha(0.5)  # Set a semi-transparent line style for each trajectory
-            axes[asset].set_ylim(
-                np.min(total_controls_np[:day + 1, :, asset]) - 1,
-                np.max(total_controls_np[:day + 1, :, asset]) + 1
-            )  # Adjust y-axis to fit the data
+            ax.plot(range(K), total_controls_np[t, :, asset], label=f'Asset {asset + 1}')
+        
+        # Customize the subplot
+        ax.set_title(f'Day {t + 1} Control Trajectories')
+        ax.set_xlabel('Time Steps')
+        ax.set_ylabel('Control Value')
+        ax.legend()
+        ax.grid(True)
 
-        fig.suptitle(f'Day {day + 1} of Trading')
-        return [line for sublist in lines for line in sublist]
-
-    # Set up the plot limits
-    for asset in range(N_assets):
-        axes[asset].set_xlim(0, K)
-        axes[asset].set_ylabel(f'Asset {asset + 1} Control')
-    axes[-1].set_xlabel('Time Step (K)')
-
-    # Create animation
-    ani = animation.FuncAnimation(
-        fig, update, frames=range(T), interval=5000, blit=True, repeat=False
-    )
-
+    # Adjust layout for better spacing
+    plt.tight_layout()
     plt.show()
+
 
 #if __name__ == "__main__":
 #%%
-main_simulation(T=20, N_assets=2, q0=100)
+main_simulation(T=50, K=10000, N_assets=2, q0=100)
 
 
 # %%

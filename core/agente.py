@@ -15,7 +15,7 @@ def base_control(q0, K):
     Returns:
     - torch.Tensor: Base control value.
     """
-    return torch.tensor([q0 / K])
+    return torch.tensor([-q0 / K])
 
 
 class DNNet(nn.Module):
@@ -33,16 +33,16 @@ class DNNet(nn.Module):
         self.base_control_fn = base_control_fn if base_control_fn is not None else base_control
 
         # Construct neural network layers with spectral normalization
-        layers = [spectral_norm(nn.Linear(in_size, hidden_size, bias=False)), nn.Tanh()]
+        layers = [nn.Linear(in_size, hidden_size, bias=False), nn.Tanh()]
         for _ in range(num_layers - 1):
-            layers.extend([spectral_norm(nn.Linear(hidden_size, hidden_size, bias=False)), nn.Tanh()])
+            layers.extend([nn.Linear(hidden_size, hidden_size, bias=False), nn.Tanh()])
         
         # Add final output layer with spectral normalization
-        layers.append(spectral_norm(nn.Linear(hidden_size, out_size, bias=False)))
+        layers.append(nn.Linear(hidden_size, out_size, bias=False))
 
         # Scale the output to enforce the Lipschitz constant
-        self.scaling_layer = nn.Linear(out_size, out_size, bias=False)
-        nn.init.constant_(self.scaling_layer.weight, self.lipschitz_constant)
+        #self.scaling_layer = nn.Linear(out_size, out_size, bias=False)
+        #nn.init.constant_(self.scaling_layer.weight, self.lipschitz_constant)
 
         self.model = nn.Sequential(*layers)
 
@@ -60,11 +60,10 @@ class DNNet(nn.Module):
         base_control = self.base_control_fn(self.q0, self.K)
         
         # Compute neural network perturbation and scale it
-        perturbation = self.scaling_layer(self.model(x))
+        perturbation = self.model(x)
         
         # Combine base control and perturbation
-        return base_control + perturbation
-
+        return perturbation#base_control + 
 
 class Agent:
     """

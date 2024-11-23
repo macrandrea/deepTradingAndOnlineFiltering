@@ -18,7 +18,7 @@ class KalmanFilter:
         self.obs_dim = M
 
         # Initialize state and covariance with torch tensors
-        self.x = torch.zeros(self.state_dim)  # Initial state
+        self.x = torch.abs(torch.randn(self.state_dim))  # Initial state
         self.P = torch.eye(self.state_dim)    # Initial covariance
         self.Q = Q if Q is not None else torch.eye(self.state_dim)  # Process noise
         self.R = R if R is not None else torch.eye(self.obs_dim)    # Measurement noise
@@ -29,7 +29,7 @@ class KalmanFilter:
 
     def reset(self, initial_state=None, initial_covariance=None):
         """Reset the filter's state and covariance to specified initial values."""
-        self.x = initial_state if initial_state is not None else torch.zeros(self.state_dim)
+        self.x = initial_state if initial_state is not None else torch.abs(torch.randn(self.state_dim))
         self.P = initial_covariance if initial_covariance is not None else torch.eye(self.state_dim)
 
     def compute_C(self):
