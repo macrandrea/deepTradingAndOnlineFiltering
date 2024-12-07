@@ -6,6 +6,7 @@ Created on Thu Nov 31 14:41:00 2024
 """
 
 import torch
+import copy
 
 class PriceModel:
     def __init__(self, M, A1_init=None, B1_init=None, A2_init=None, B2_init=None,
@@ -48,10 +49,10 @@ class PriceModel:
         noise_x_2 = self.Q_2 @ torch.randn(self.M2)
 
         # Update x1 using A1, B1, control input, and process noise
-        self.x1_k = self.A1 @ self.x1_k + self.B1 @ self.u_k + noise_x_1
+        self.x1_k = self.A1 @ self.x1_k + self.B1 @ torch.abs(self.u_k) + noise_x_1
         
         # Update x2 using A2, B2, control input, and process noise
-        self.x2_k = self.A2 @ self.x2_k + self.B2 @ self.u_k + noise_x_2
+        self.x2_k = self.A2 @ self.x2_k + self.B2 @ torch.abs(self.u_k) + noise_x_2
     
     def update_returns(self):
         """
@@ -77,5 +78,13 @@ class PriceModel:
         """
         Updates the control input for the next time step.
         """
-        self.u_k = new_control_input
- 
+        with torch.no_grad():
+            self.u_k = new_control_input
+            
+    def copy(self):
+        """
+        Create a deep copy of the current PriceModel instance.
+        Returns:
+            A new PriceModel instance with identical values, independent of the original.
+        """
+        return copy.deepcopy(self)

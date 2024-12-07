@@ -33,12 +33,12 @@ class DNNet(nn.Module):
         self.base_control_fn = base_control_fn if base_control_fn is not None else base_control
 
         # Construct neural network layers with spectral normalization
-        layers = [nn.Linear(in_size, hidden_size, bias=False), nn.Tanh()]
+        layers = [nn.Linear(in_size, hidden_size, bias=True), nn.LeakyReLU(negative_slope=0.1)]
         for _ in range(num_layers - 1):
-            layers.extend([nn.Linear(hidden_size, hidden_size, bias=False), nn.Tanh()])
+            layers.extend([nn.Linear(hidden_size, hidden_size, bias=True), nn.LeakyReLU(negative_slope=0.1)])
         
         # Add final output layer with spectral normalization
-        layers.append(nn.Linear(hidden_size, out_size, bias=False))
+        layers.extend([nn.Linear(hidden_size, out_size, bias=False), nn.Tanh()])
 
         # Scale the output to enforce the Lipschitz constant
         #self.scaling_layer = nn.Linear(out_size, out_size, bias=False)
@@ -63,20 +63,34 @@ class DNNet(nn.Module):
         perturbation = self.model(x)
         
         # Combine base control and perturbation
-        return perturbation#base_control + 
+        return perturbation # + base_control  #perturbation + 
 
 class Agent:
-    """
-    An agent that uses a neural network for control generation and training.
-    """
-    def __init__(self, q0, K, in_size, out_size, learning_rate=0.001, l2_radius=0.9, lipschitz_constant=1.0):
+    def __init__(self, q0, K, in_size, out_size, learning_rate=0.001, l2_radius=0.9, lipschitz_constant=1.0, step_size=50, gamma=0.5):
+        """
+        Initializes the agent with a neural network, optimizer, and learning rate scheduler.
+
+        Args:
+            q0: Initial parameter for the neural network.
+            K: Number of control steps.
+            in_size: Input size for the neural network.
+            out_size: Output size for the neural network.
+            learning_rate: Initial learning rate for the optimizer.
+            l2_radius: L2 regularization radius.
+            lipschitz_constant: Lipschitz constant for the neural network.
+            step_size: Number of steps before reducing the learning rate.
+            gamma: Multiplicative factor for learning rate decay.
+        """
         self.nn = DNNet(q0=q0, K=K, in_size=in_size, out_size=out_size, lipschitz_constant=lipschitz_constant)
         self.optimizer = optim.AdamW(self.nn.parameters(), lr=learning_rate)
+        self.scheduler = optim.lr_scheduler.StepLR(self.optimizer, step_size=step_size, gamma=gamma)
         self.criterion = nn.MSELoss()
         self.K = K
         self.q0 = q0
         self.step_count = 0
         self.l2_radius = l2_radius
+        self.in_size = in_size
+        self.out_size = out_size
 
     def generate_control(self, residuals_fundamental, residuals_efficient, remaining_inventory, time_step):
         """
@@ -96,18 +110,31 @@ class Agent:
         return self.nn(input_data)
 
     def train(self, loss):
-        """
-        Trains the neural network using the given loss.
-
-        Parameters:
-        - loss: Computed loss tensor.
-        """
         if self.step_count >= self.K:
             self.optimizer.zero_grad()
-            loss.backward()
-            self.optimizer.step()
-            self.project_weights_to_l2_ball()
+            
+            # Debug loss
+            #print(f"Loss grad_fn: {loss.grad_fn}")
+            
+            # Backward pass
+            with torch.autograd.set_detect_anomaly(True):
+                try:
+                    loss.backward()
+                except RuntimeError as e:
+                    print("Error during backward:", e)
+                    raise
+                
+            # Optimizer step
+            self.optimizer.step()  # Update parameters
+            self.scheduler.step()  # Update the learning rate
+            # self.project_weights_to_l2_ball()
 
+    def get_lr(self):
+        """
+        Returns the current learning rate.
+        """
+        return self.optimizer.param_groups[0]['lr']
+    
     def project_weights_to_l2_ball(self):
         """
         Projects all network parameters onto an L2 ball with the specified radius.
@@ -118,17 +145,46 @@ class Agent:
                 if param_norm > self.l2_radius:
                     param.data = param * (self.l2_radius / param_norm)
 
-    def copy(self):
-        """
-        Creates a new agent with the same neural network weights.
-
-        Returns:
-        - Agent: A new agent instance.
-        """
-        new_agent = Agent(q0=self.q0, K=self.K, in_size=self.nn.model[0].in_features,
-                          out_size=self.nn.model[-2].out_features, learning_rate=self.optimizer.param_groups[0]['lr'],
-                          l2_radius=self.l2_radius, lipschitz_constant=self.nn.lipschitz_constant)
-        new_agent.nn.load_state_dict(self.nn.state_dict())
+    '''def clone(self):
+        # Create a new agent with the same parameters and weights
+        new_agent = Agent(
+            q0=self.q0,
+            K=self.K,
+            in_size=self.in_size,
+            out_size=self.out_size,
+            learning_rate=self.optimizer.param_groups[0]['lr'],
+            l2_radius=self.l2_radius
+        )
+        # Detach and clone parameters
+        new_state_dict = {key: val.detach().clone() for key, val in self.nn.state_dict().items()}
+        new_agent.nn.load_state_dict(new_state_dict)
         return new_agent
+    '''
+    def clone(self):
+        """
+        Create a new agent with the same parameters, weights, and scheduler state.
+        """
+        # Create a new agent with the same initialization parameters
+        new_agent = Agent(
+            q0=self.q0,
+            K=self.K,
+            in_size=self.in_size,
+            out_size=self.out_size,
+            learning_rate=self.optimizer.param_groups[0]['lr'],  # Use current learning rate
+            l2_radius=self.l2_radius
+        )
+        
+        # Clone neural network parameters
+        new_state_dict = {key: val.detach().clone() for key, val in self.nn.state_dict().items()}
+        new_agent.nn.load_state_dict(new_state_dict)
+        
+        # Copy optimizer state
+        new_agent.optimizer.load_state_dict(self.optimizer.state_dict())
+        
+        # Clone scheduler state
+        new_agent.scheduler.last_epoch = self.scheduler.last_epoch  # Restore scheduler step count
+        
+        return new_agent
+
 
     

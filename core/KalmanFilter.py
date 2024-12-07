@@ -22,10 +22,15 @@ class KalmanFilter:
         self.P = torch.eye(self.state_dim)    # Initial covariance
         self.Q = Q if Q is not None else torch.eye(self.state_dim)  # Process noise
         self.R = R if R is not None else torch.eye(self.obs_dim)    # Measurement noise
+        self.Q.requires_grad = False
+        self.R.requires_grad = False
 
         # Initialize matrices A and B for MLE estimation
         self.A = A_init if A_init is not None else torch.randn(self.state_dim, self.state_dim)
         self.B = B_init if B_init is not None else torch.randn(self.state_dim, self.control_dim)
+
+        self.A.requires_grad = False
+        self.B.requires_grad = False
 
     def reset(self, initial_state=None, initial_covariance=None):
         """Reset the filter's state and covariance to specified initial values."""
@@ -39,7 +44,7 @@ class KalmanFilter:
     def predict(self, u_k):
         """Predict the next state and covariance based on control input."""
 
-        x_pred = self.A.float() @ self.x + self.B.float() @ u_k
+        x_pred = self.A.float() @ self.x + self.B.float() @ torch.abs(u_k)
         P_pred = self.A.float() @ self.P.float() @ self.A.mT.float() + self.Q.float()
         return x_pred, P_pred
     
@@ -50,8 +55,9 @@ class KalmanFilter:
         S = H @ P_pred @ H.T + self.R  # Innovation covariance
         K = P_pred @ H.T @ torch.linalg.inv(S)  # Kalman gain
         # Update state and covariance
-        self.x = x_pred + K @ (y_k - y_pred)
-        self.P = (torch.eye(self.state_dim, device=u_k.device) - K @ H) @ P_pred
+        with torch.no_grad():
+            self.x = x_pred + K @ (y_k - y_pred)
+            self.P = (torch.eye(self.state_dim, device=u_k.device) - K @ H) @ P_pred
         return self.x
 
     def fit(self, Y, U):
@@ -94,7 +100,7 @@ class KalmanFilter:
 
     def _predict_step(self, A, B, u_k):
         """Helper for internal predict step during likelihood calculation."""
-        x_pred = A.float() @ self.x + B.float() @ u_k
+        x_pred = A.float() @ self.x + B.float() @ torch.abs(u_k)
         P_pred = A.float() @ self.P.float() @ A.T.float() + self.Q.float()
         return x_pred, P_pred
 
